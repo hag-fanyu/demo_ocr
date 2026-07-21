@@ -212,25 +212,475 @@ class CDPWebView:
         self.close()
 
 
+# ─── 拟人化操作工具集 ────────────────────────────────────────────────────
+
+import random
+import math
+
+
+class HumanBehavior:
+    """拟人化操作工具集 — 让自动化行为更接近真人。
+
+    核心策略：
+      1. 随机延迟：替代固定 time.sleep()，加入抖动模拟人类反应时间不确定
+      2. 逐字输入：替代 set_text() 一次性输入，模拟真人打字节奏
+      3. 拟人点击：点击坐标加微小随机偏移，点击前有停顿
+      4. 拟人滑动：贝塞尔曲线路径 + 变速 + 微抖，模拟手指自然滑动
+      5. 拟人滚动：多次小滑动组成一次滚动，偶尔回滚
+      6. 随机停顿：偶尔产生较长停顿，模拟走神/思考
+      7. 浏览手势：进入新页面后做小幅滑动，像真人在浏览内容
+    """
+
+    def __init__(self, speed: float = 1.0, verbose: bool = False):
+        """
+        Args:
+            speed: 操作速度倍率
+                   0.5 = 慢速更拟人（延迟更长）
+                   1.0 = 正常
+                   2.0 = 快速（延迟更短，但仍有随机性）
+            verbose: 是否输出详细日志
+        """
+        self.speed = speed
+        self.verbose = verbose
+
+    def _log(self, msg: str) -> None:
+        if self.verbose:
+            print(f"  [human] {msg}")
+
+    # ── 随机延迟 ──────────────────────────────────────────────────────
+
+    def human_delay(self, base: float, jitter_ratio: float = 0.3) -> None:
+        """拟人化延迟 — 在 base ± jitter_ratio 范围内随机等待。
+
+        Args:
+            base: 基础延迟秒数
+            jitter_ratio: 抖动比例（0.3 表示 ±30%）
+        """
+        jitter = base * jitter_ratio
+        delay = base + random.uniform(-jitter, jitter)
+        delay = max(0.05, delay / self.speed)  # 最低 50ms，受速度倍率影响
+        self._log(f"human_delay: base={base:.2f}s, actual={delay:.3f}s")
+        time.sleep(delay)
+
+    # ── 逐字输入 ──────────────────────────────────────────────────────
+
+    def human_type(
+        self,
+        device: Any,
+        element: Any,
+        text: str,
+        mode: str = "normal",
+    ) -> None:
+        """拟人化逐字输入 — 模拟真人打字节奏。
+
+        Args:
+            device: u2.Device 实例
+            element: 要输入的 UI 元素
+            text: 要输入的文字
+            mode: 输入模式
+                  "normal"  — 普通输入（50-200ms/字符）
+                  "digit"   — 数字输入（80-150ms/字符，模拟数字键盘）
+                  "fast"    — 快速输入（30-80ms/字符，验证码等）
+        """
+        # 先清空输入框
+        try:
+            element.clear_text()
+        except Exception:
+            pass
+
+        # 根据模式设定字符间延迟范围（毫秒）
+        if mode == "digit":
+            min_ms, max_ms = 80, 150
+        elif mode == "fast":
+            min_ms, max_ms = 30, 80
+        else:  # normal
+            min_ms, max_ms = 50, 200
+
+        # 模拟打字错误的相邻键映射
+        typo_map = {
+            "0": "9", "1": "2", "2": "1", "3": "4", "4": "3",
+            "5": "6", "6": "5", "7": "8", "8": "7", "9": "0",
+            "a": "s", "s": "a", "d": "f", "f": "d",
+            "q": "w", "w": "q", "e": "r", "r": "e",
+        }
+
+        for i, char in enumerate(text):
+            # 偶尔模拟打字错误（5% 概率，仅对有映射的字符）
+            if random.random() < 0.05 and char.lower() in typo_map:
+                wrong_char = typo_map[char.lower()]
+                if char.isupper():
+                    wrong_char = wrong_char.upper()
+                self._log(f"  模拟打字错误：{char!r} → {wrong_char!r}")
+                # 输入错误字符
+                element.send_keys(wrong_char)
+                # 短暂停顿后删除
+                time.sleep(random.uniform(0.15, 0.4) / self.speed)
+                device.press("del")
+                time.sleep(random.uniform(0.1, 0.2) / self.speed)
+
+            # 输入正确字符
+            element.send_keys(char)
+
+            # 字符间延迟
+            if i < len(text) - 1:  # 最后一个字符后不延迟
+                delay_ms = random.uniform(min_ms, max_ms)
+                # 偶尔有更长停顿（10% 概率，模拟思考/分心）
+                if random.random() < 0.10:
+                    delay_ms *= random.uniform(2.0, 4.0)
+                    self._log(f"  第 {i+1} 字符后停顿：{delay_ms:.0f}ms（思考）")
+                time.sleep(delay_ms / 1000.0 / self.speed)
+
+        self._log(f"human_type: 输入 {len(text)} 字符, mode={mode}")
+
+    # ── 拟人点击 ──────────────────────────────────────────────────────
+
+    def human_click(self, device: Any, x: float, y: float) -> None:
+        """拟人化点击 — 坐标微偏移 + 点击前停顿 + 按压保持。
+
+        Args:
+            device: u2.Device 实例
+            x: 目标 x 坐标
+            y: 目标 y 坐标
+        """
+        # 点击前停顿（模拟手指移动到目标位置的时间）
+        pre_delay = random.uniform(0.05, 0.15) / self.speed
+        time.sleep(pre_delay)
+
+        # 坐标微偏移（±3~8px，真人不会每次精确点中像素中心）
+        offset_x = random.uniform(-8, 8)
+        offset_y = random.uniform(-8, 8)
+        actual_x = x + offset_x
+        actual_y = y + offset_y
+
+        # 执行点击
+        device.click(actual_x, actual_y)
+
+        # 按压保持（真人点击不是瞬间抬起）
+        hold_delay = random.uniform(0.02, 0.08) / self.speed
+        time.sleep(hold_delay)
+
+        self._log(
+            f"human_click: target=({x:.0f},{y:.0f}), "
+            f"actual=({actual_x:.0f},{actual_y:.0f}), "
+            f"offset=({offset_x:.1f},{offset_y:.1f})"
+        )
+
+    def human_click_element(self, element: Any) -> None:
+        """拟人化点击 UI 元素 — 获取元素中心坐标后调用 human_click。
+
+        Args:
+            element: u2 UI 元素
+        """
+        try:
+            bounds = element.bounds()
+            if len(bounds) == 4:
+                cx = (bounds[0] + bounds[2]) / 2
+                cy = (bounds[1] + bounds[3]) / 2
+                # 需要设备实例，但 element 上没有直接暴露
+                # 回退：直接 click + 前后停顿
+                pre_delay = random.uniform(0.05, 0.15) / self.speed
+                time.sleep(pre_delay)
+                element.click()
+                hold_delay = random.uniform(0.02, 0.08) / self.speed
+                time.sleep(hold_delay)
+                self._log(f"human_click_element: bounds={bounds}")
+                return
+        except Exception:
+            pass
+
+        # 兜底：直接点击 + 停顿
+        pre_delay = random.uniform(0.05, 0.15) / self.speed
+        time.sleep(pre_delay)
+        element.click()
+        hold_delay = random.uniform(0.02, 0.08) / self.speed
+        time.sleep(hold_delay)
+        self._log("human_click_element: direct click")
+
+    # ── 拟人滑动 ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _bezier_point(t: float, points: List[Tuple[float, float]]) -> Tuple[float, float]:
+        """计算贝塞尔曲线上 t 处的点。
+
+        Args:
+            t: 参数 [0, 1]
+            points: 控制点列表
+
+        Returns:
+            (x, y) 坐标
+        """
+        n = len(points) - 1
+        x = 0.0
+        y = 0.0
+        for i, (px, py) in enumerate(points):
+            # 伯恩斯坦多项式
+            coeff = math.comb(n, i) * (t ** i) * ((1 - t) ** (n - i))
+            x += coeff * px
+            y += coeff * py
+        return x, y
+
+    def human_swipe(
+        self,
+        device: Any,
+        sx: float,
+        sy: float,
+        ex: float,
+        ey: float,
+        duration: Optional[float] = None,
+    ) -> None:
+        """拟人化滑动 — 贝塞尔曲线路径 + 变速 + 微抖。
+
+        Args:
+            device: u2.Device 实例
+            sx, sy: 起点坐标
+            ex, ey: 终点坐标
+            duration: 滑动持续时间（秒），None 则自动计算
+        """
+        # 起止点微偏移
+        sx += random.uniform(-3, 3)
+        sy += random.uniform(-3, 3)
+        ex += random.uniform(-3, 3)
+        ey += random.uniform(-3, 3)
+
+        # 计算滑动距离
+        dist = math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2)
+
+        # 自动计算持续时间（距离越长越慢）
+        if duration is None:
+            duration = max(0.3, min(1.5, dist / 500)) / self.speed
+
+        # 生成贝塞尔曲线控制点
+        # 在起点和终点之间加入 1-2 个随机控制点，产生自然弧度
+        mid_x = (sx + ex) / 2 + random.uniform(-dist * 0.1, dist * 0.1)
+        mid_y = (sy + ey) / 2 + random.uniform(-dist * 0.1, dist * 0.1)
+
+        if random.random() < 0.5:
+            # 二次贝塞尔（1 个控制点）
+            control_points = [(sx, sy), (mid_x, mid_y), (ex, ey)]
+        else:
+            # 三次贝塞尔（2 个控制点）
+            q1_x = sx + (ex - sx) * 0.33 + random.uniform(-dist * 0.08, dist * 0.08)
+            q1_y = sy + (ey - sy) * 0.33 + random.uniform(-dist * 0.08, dist * 0.08)
+            q2_x = sx + (ex - sx) * 0.66 + random.uniform(-dist * 0.08, dist * 0.08)
+            q2_y = sy + (ey - sy) * 0.66 + random.uniform(-dist * 0.08, dist * 0.08)
+            control_points = [(sx, sy), (q1_x, q1_y), (q2_x, q2_y), (ex, ey)]
+
+        # 生成滑动路径点（带微抖）
+        num_steps = max(10, int(duration * 60))  # 约 60 步/秒
+        path_points = []
+        for step in range(num_steps + 1):
+            # 缓入缓出：t 不是均匀分布，而是用 ease-in-out 映射
+            t_linear = step / num_steps
+            # ease-in-out: t' = 3t² - 2t³
+            t_eased = 3 * t_linear ** 2 - 2 * t_linear ** 3
+
+            bx, by = self._bezier_point(t_eased, control_points)
+
+            # 微抖（±2px，模拟手指不稳）
+            bx += random.uniform(-2, 2)
+            by += random.uniform(-2, 2)
+
+            path_points.append((bx, by))
+
+        # 使用 u2 的 swipe 执行（简化版：直接用起止点，但加入贝塞尔中点）
+        # u2 的 swipe 不支持路径点，所以用分段 swipe 模拟
+        # 实际上 u2 swipe 内部已经做了插值，我们主要用贝塞尔的起止点
+        # 但加上中间停顿模拟变速
+        segments = 3
+        for seg in range(segments):
+            idx_start = seg * num_steps // segments
+            idx_end = (seg + 1) * num_steps // segments
+            p1 = path_points[idx_start]
+            p2 = path_points[idx_end]
+
+            # 归一化坐标（u2 swipe 使用 0~1 比例坐标）
+            window_size = device.window_size()
+            w, h = window_size[0], window_size[1]
+
+            # 使用绝对坐标的 swipe
+            seg_duration = duration / segments
+            # 中间段稍快，首尾段稍慢（变速效果）
+            if seg == 0 or seg == segments - 1:
+                seg_duration *= 1.3
+            else:
+                seg_duration *= 0.7
+
+            device.swipe(
+                p1[0] / w, p1[1] / h,
+                p2[0] / w, p2[1] / h,
+                duration=seg_duration,
+            )
+
+        self._log(
+            f"human_swipe: ({sx:.0f},{sy:.0f}) → ({ex:.0f},{ey:.0f}), "
+            f"duration={duration:.2f}s, steps={num_steps}"
+        )
+
+    # ── 拟人滚动 ──────────────────────────────────────────────────────
+
+    def human_scroll(
+        self,
+        device: Any,
+        direction: str = "down",
+        distance: float = 0.5,
+    ) -> None:
+        """拟人化滚动 — 多次小滑动 + 偶尔回滚。
+
+        Args:
+            device: u2.Device 实例
+            direction: "down" 向下滚 / "up" 向上滚
+            distance: 滚动距离（屏幕比例 0~1）
+        """
+        # 将一次大滚动拆分为 2-4 次小滑动
+        num_swipes = random.randint(2, 4)
+        remaining = distance
+
+        for i in range(num_swipes):
+            # 每次滑动距离略有不同
+            if i < num_swipes - 1:
+                swipe_dist = remaining * random.uniform(0.2, 0.5)
+            else:
+                swipe_dist = remaining
+            remaining -= swipe_dist
+
+            # 滑动方向
+            if direction == "down":
+                sx, sy = 0.5, 0.7
+                ey = sy - swipe_dist
+                ex = 0.5 + random.uniform(-0.02, 0.02)  # 微偏移
+            else:
+                sx, sy = 0.5, 0.3
+                ey = sy + swipe_dist
+                ex = 0.5 + random.uniform(-0.02, 0.02)
+
+            device.swipe(sx, sy, ex, ey)
+            self._log(f"  滚动第 {i+1}/{num_swipes} 次: dist={swipe_dist:.3f}")
+
+            # 滑动间停顿
+            if i < num_swipes - 1:
+                self.human_delay(0.3, jitter_ratio=0.3)
+
+        # 偶尔回滚（8% 概率，模拟真人调整浏览位置）
+        if random.random() < 0.08:
+            rollback_dist = distance * random.uniform(0.05, 0.15)
+            if direction == "down":
+                device.swipe(0.5, 0.3, 0.5, 0.3 + rollback_dist)
+            else:
+                device.swipe(0.5, 0.7, 0.5, 0.7 - rollback_dist)
+            self._log(f"  回滚: dist={rollback_dist:.3f}")
+            self.human_delay(0.2, jitter_ratio=0.2)
+
+    # ── 随机停顿 ──────────────────────────────────────────────────────
+
+    def random_pause(self, probability: float = 0.10) -> None:
+        """偶尔产生随机停顿，模拟走神/思考。
+
+        Args:
+            probability: 触发概率（默认 10%）
+        """
+        if random.random() < probability:
+            pause = random.uniform(1.0, 3.0) / self.speed
+            self._log(f"random_pause: {pause:.2f}s（走神/思考）")
+            time.sleep(pause)
+
+    # ── 浏览手势 ──────────────────────────────────────────────────────
+
+    def human_gesture_navigate(self, device: Any) -> None:
+        """拟人浏览手势 — 进入新页面后做小幅滑动，像真人在浏览内容。
+
+        Args:
+            device: u2.Device 实例
+        """
+        # 1-3 次小幅下滑
+        num_scrolls = random.randint(1, 3)
+        for i in range(num_scrolls):
+            # 小幅滑动（屏幕 10%-20%）
+            scroll_dist = random.uniform(0.10, 0.20)
+            device.swipe(0.5, 0.6, 0.5, 0.6 - scroll_dist)
+            self._log(f"  浏览滑动 {i+1}/{num_scrolls}: dist={scroll_dist:.2f}")
+
+            # 滑动间停顿（像在阅读）
+            self.human_delay(0.8, jitter_ratio=0.4)
+
+        # 偶尔滑回顶部一点（15% 概率）
+        if random.random() < 0.15:
+            device.swipe(0.5, 0.4, 0.5, 0.4 + random.uniform(0.05, 0.10))
+            self._log("  浏览回滑")
+            self.human_delay(0.3, jitter_ratio=0.3)
+
+    # ── 操作间随机微操作 ──────────────────────────────────────────────
+
+    def random_micro_action(self, device: Any) -> None:
+        """在关键操作间偶尔插入无关微操作，增加拟人感。
+
+        15% 概率触发，随机选择一种微操作：
+          - 轻微幅滑动（像无意中碰到屏幕）
+          - 短暂停顿（像在思考下一步）
+          - 轻触屏幕空白区域（像无意识点击）
+
+        Args:
+            device: u2.Device 实例
+        """
+        if random.random() > 0.15:
+            return
+
+        action = random.choice(["micro_swipe", "pause", "micro_touch"])
+
+        if action == "micro_swipe":
+            # 轻微滑动（屏幕 2%-5%）
+            dist = random.uniform(0.02, 0.05)
+            direction = random.choice(["down", "up"])
+            if direction == "down":
+                device.swipe(0.5, 0.5, 0.5, 0.5 - dist)
+            else:
+                device.swipe(0.5, 0.5, 0.5, 0.5 + dist)
+            self._log("微操作: 轻微滑动")
+
+        elif action == "pause":
+            # 短暂停顿
+            time.sleep(random.uniform(0.3, 0.8) / self.speed)
+            self._log("微操作: 短暂停顿")
+
+        elif action == "micro_touch":
+            # 轻触屏幕空白区域（上半屏中间区域）
+            x = random.uniform(0.3, 0.7)
+            y = random.uniform(0.1, 0.3)
+            device.click(x, y)
+            self._log(f"微操作: 轻触 ({x:.2f}, {y:.2f})")
+
+
 # ─── 核心自动化类 ────────────────────────────────────────────────────────
 
 class DamaiU2Automation:
     """大麦网 uiautomator2 自动化（APP 内 WebView）。"""
 
-    def __init__(self, device_serial: Optional[str] = None, verbose: bool = False):
+    def __init__(
+        self,
+        device_serial: Optional[str] = None,
+        verbose: bool = False,
+        human: bool = True,
+        human_speed: float = 1.0,
+    ):
         """
         Args:
             device_serial: 设备序列号，None 则自动检测
             verbose: 是否输出详细日志
+            human: 是否启用拟人化操作模式
+            human_speed: 拟人化速度倍率（0.5=慢速更拟人, 1.0=正常, 2.0=快速）
         """
         self.device_serial = device_serial
         self.verbose = verbose
+        self.human_mode = human
         self.d: Optional[u2.Device] = None
         self._wd = None  # WebDriver (chrome devtools)
         self._native_context: Optional[str] = None
         self._webview_warned = False  # 是否已提示过 WebView 不可用
         self._webview_context: Optional[str] = None
         self._cookies: List[Dict[str, Any]] = []
+        # 拟人化操作工具
+        self._hb: Optional[HumanBehavior] = (
+            HumanBehavior(speed=human_speed, verbose=verbose) if human else None
+        )
 
     # ── 日志 ──────────────────────────────────────────────────────────
     def _log(self, msg: str) -> None:
@@ -240,6 +690,33 @@ class DamaiU2Automation:
     @staticmethod
     def _warn(msg: str) -> None:
         sys.stderr.write(f"[warn] {msg}\n")
+
+    # ── 拟人化辅助 ────────────────────────────────────────────────────
+    def _human_delay(self, base: float, jitter_ratio: float = 0.3) -> None:
+        """拟人化延迟（若未启用拟人化则使用固定延迟）。"""
+        if self._hb:
+            self._hb.human_delay(base, jitter_ratio)
+        else:
+            time.sleep(base)
+
+    def _human_click_element(self, element: Any) -> None:
+        """拟人化点击元素（若未启用拟人化则直接点击）。"""
+        if self._hb:
+            self._hb.human_click_element(element)
+        else:
+            element.click()
+
+    def _human_scroll(self, direction: str = "down", distance: float = 0.5) -> None:
+        """拟人化滚动（若未启用拟人化则直接滑动）。"""
+        if not self.d:
+            return
+        if self._hb:
+            self._hb.human_scroll(self.d, direction, distance)
+        else:
+            if direction == "down":
+                self.d.swipe(0.5, 0.8, 0.5, 0.8 - distance)
+            else:
+                self.d.swipe(0.5, 0.2, 0.5, 0.2 + distance)
 
     # ── 设备连接 ──────────────────────────────────────────────────────
     def connect_device(self) -> None:
@@ -264,6 +741,8 @@ class DamaiU2Automation:
         device_info = self.d.info
         print(f"✅ 已连接设备：{self.d.serial}")
         self._log(f"设备信息：{device_info}")
+        if self.human_mode:
+            print(f"🧑 拟人化模式已启用（速度倍率：{self._hb.speed if self._hb else 'N/A'}）")
 
         # 初始化 ATX agent
         self._log("初始化 ATX agent…")
@@ -278,15 +757,20 @@ class DamaiU2Automation:
         print("🚀 正在启动大麦 APP…")
         try:
             self.d.app_start(DAMAI_PACKAGE, DAMAI_ACTIVITY, wait=True)
-            time.sleep(3)  # 等待 APP 启动
+            self._human_delay(3, jitter_ratio=0.2)  # 等待 APP 启动
             self._log("大麦 APP 已启动")
+            # 拟人化：启动后做浏览手势
+            if self._hb:
+                self._hb.human_gesture_navigate(self.d)
         except Exception as e:
             self._warn(f"启动大麦 APP 失败：{e}")
             # 尝试只用包名启动
             try:
                 self.d.app_start(DAMAI_PACKAGE, wait=True)
-                time.sleep(3)
+                self._human_delay(3, jitter_ratio=0.2)
                 self._log("大麦 APP 已启动（备用方式）")
+                if self._hb:
+                    self._hb.human_gesture_navigate(self.d)
             except Exception as e2:
                 print(f"❌ 无法启动大麦 APP：{e2}")
                 print("请确认已安装大麦 APP（包名：cn.damai）")
@@ -366,7 +850,7 @@ class DamaiU2Automation:
                                 pass
                             # 设置正确的转发：本地 TCP → 设备抽象套接字
                             self.d.adb.forward(f"tcp:{local_port}", f"localabstract:{abstract_name}")
-                            time.sleep(0.5)
+                            self._human_delay(0.5, jitter_ratio=0.1)
                             # 验证端口可用
                             resp = requests.get(
                                 f"http://127.0.0.1:{local_port}/json/version",
@@ -582,6 +1066,10 @@ class DamaiU2Automation:
         """
         print("🔄 正在切换到 WebView（CDP 方式）…")
 
+        # 拟人化：切换前微操作
+        if self._hb and self.d:
+            self._hb.random_micro_action(self.d)
+
         if not requests:
             self._warn("缺少 requests 库，请执行：pip install requests")
         if not websocket:
@@ -667,7 +1155,7 @@ class DamaiU2Automation:
         try:
             self._wd.get(url)
             self._log(f"已导航到：{url}")
-            time.sleep(2)
+            self._human_delay(2, jitter_ratio=0.2)
         except Exception as e:
             self._warn(f"导航失败：{e}")
 
@@ -696,7 +1184,7 @@ class DamaiU2Automation:
         # 策略 1：在 native 层操作
         try:
             self.switch_to_native()
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
 
             # 点击底部「我的」tab（多种匹配方式）
             my_tab = self.d(text="我的")
@@ -707,9 +1195,13 @@ class DamaiU2Automation:
             if not my_tab.exists(timeout=3):
                 my_tab = self.d(resourceIdMatches=".*tab.*mine.*|.*tab.*my.*|.*bottom.*my.*")
             if my_tab.exists(timeout=3):
-                my_tab.click()
+                self._human_click_element(my_tab)
                 self._log("已点击「我的」tab")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
+
+                # 拟人化：浏览手势
+                if self._hb:
+                    self._hb.human_gesture_navigate(self.d)
 
                 # 查找登录/注册按钮（多种匹配方式）
                 login_btn = self.d(textContains="登录")
@@ -718,25 +1210,25 @@ class DamaiU2Automation:
                 if not login_btn.exists(timeout=3):
                     login_btn = self.d(textContains="Login")
                 if login_btn.exists(timeout=3):
-                    login_btn.click()
+                    self._human_click_element(login_btn)
                     self._log("已点击登录按钮")
-                    time.sleep(2)
+                    self._human_delay(2, jitter_ratio=0.2)
                     return True
 
                 # 查找头像（未登录时点击头像进入登录）
                 avatar = self.d(resourceIdMatches=".*avatar.*|.*user.*icon.*|.*head.*img.*")
                 if avatar.exists(timeout=3):
-                    avatar.click()
+                    self._human_click_element(avatar)
                     self._log("已点击头像进入登录")
-                    time.sleep(2)
+                    self._human_delay(2, jitter_ratio=0.2)
                     return True
 
                 # 查找「登录/注册」文字（可能直接是可点击文字）
                 login_text = self.d(text="登录/注册")
                 if login_text.exists(timeout=3):
-                    login_text.click()
+                    self._human_click_element(login_text)
                     self._log("已点击「登录/注册」文字")
-                    time.sleep(2)
+                    self._human_delay(2, jitter_ratio=0.2)
                     return True
 
         except Exception as e:
@@ -746,7 +1238,7 @@ class DamaiU2Automation:
         print("  尝试通过 H5 页面登录…")
         if self.switch_to_webview():
             self.navigate_to_url(H5_LOGIN_URL)
-            time.sleep(3)
+            self._human_delay(3, jitter_ratio=0.2)
             current = self.get_current_url()
             if "passport" in current or "login" in current:
                 print("✅ 已到达登录页面")
@@ -791,14 +1283,22 @@ class DamaiU2Automation:
                 resourceIdMatches=".*phone.*|.*mobile.*|.*account.*"
             )
             if phone_field.exists(timeout=3):
-                phone_field.set_text(phone)
+                # 拟人化：逐字输入手机号（数字模式）
+                if self._hb:
+                    self._hb.human_type(self.d, phone_field, phone, mode="digit")
+                else:
+                    phone_field.set_text(phone)
                 self._log("已通过 Native 输入手机号")
                 return True
 
             # 通过 className 查找 EditText
             edit_fields = self.d(className="android.widget.EditText")
             if edit_fields.exists(timeout=3):
-                edit_fields.set_text(phone)
+                # 拟人化：逐字输入手机号（数字模式）
+                if self._hb:
+                    self._hb.human_type(self.d, edit_fields, phone, mode="digit")
+                else:
+                    edit_fields.set_text(phone)
                 self._log("已通过 EditText 输入手机号")
                 return True
 
@@ -815,6 +1315,10 @@ class DamaiU2Automation:
             是否成功点击
         """
         print("📤 正在点击发送验证码…")
+
+        # 拟人化：点击前随机停顿
+        if self._hb:
+            self._hb.random_pause(probability=0.15)
 
         # WebView 方式（通过 JS）
         if self._wd:
@@ -850,19 +1354,19 @@ class DamaiU2Automation:
             self.switch_to_native()
             send_btn = self.d(textContains="获取验证码")
             if send_btn.exists(timeout=3):
-                send_btn.click()
+                self._human_click_element(send_btn)
                 self._log("已通过 Native 点击发送验证码")
                 return True
 
             send_btn = self.d(textContains="发送验证码")
             if send_btn.exists(timeout=3):
-                send_btn.click()
+                self._human_click_element(send_btn)
                 self._log("已通过 Native 点击发送验证码")
                 return True
 
             send_btn = self.d(textContains="获取短信")
             if send_btn.exists(timeout=3):
-                send_btn.click()
+                self._human_click_element(send_btn)
                 self._log("已通过 Native 点击发送验证码")
                 return True
 
@@ -908,7 +1412,11 @@ class DamaiU2Automation:
                 resourceIdMatches=".*code.*|.*verify.*|.*sms.*"
             )
             if code_field.exists(timeout=3):
-                code_field.set_text(code)
+                # 拟人化：逐字快速输入验证码
+                if self._hb:
+                    self._hb.human_type(self.d, code_field, code, mode="fast")
+                else:
+                    code_field.set_text(code)
                 self._log("已通过 Native 输入验证码")
                 return True
 
@@ -916,7 +1424,11 @@ class DamaiU2Automation:
             edit_fields = self.d(className="android.widget.EditText")
             count = edit_fields.count
             if count >= 2:
-                edit_fields[count - 1].set_text(code)
+                # 拟人化：逐字快速输入验证码
+                if self._hb:
+                    self._hb.human_type(self.d, edit_fields[count - 1], code, mode="fast")
+                else:
+                    edit_fields[count - 1].set_text(code)
                 self._log("已通过第二个 EditText 输入验证码")
                 return True
 
@@ -933,6 +1445,10 @@ class DamaiU2Automation:
             是否成功点击
         """
         print("🔐 正在点击登录…")
+
+        # 拟人化：点击前随机停顿（像在确认信息）
+        if self._hb:
+            self._hb.random_pause(probability=0.20)
 
         # WebView 方式（通过 JS）
         if self._wd:
@@ -961,13 +1477,13 @@ class DamaiU2Automation:
             self.switch_to_native()
             login_btn = self.d(text="登录")
             if login_btn.exists(timeout=3):
-                login_btn.click()
+                self._human_click_element(login_btn)
                 self._log("已通过 Native 点击登录")
                 return True
 
             login_btn = self.d(textContains="登录")
             if login_btn.exists(timeout=3):
-                login_btn.click()
+                self._human_click_element(login_btn)
                 self._log("已通过 Native 点击登录")
                 return True
 
@@ -1016,7 +1532,7 @@ class DamaiU2Automation:
             except Exception:
                 pass
 
-            time.sleep(2)
+            self._human_delay(2, jitter_ratio=0.2)
 
         self._warn("登录超时")
         return False
@@ -1115,9 +1631,9 @@ class DamaiU2Automation:
             # 查找搜索框/搜索按钮
             search_entry = self.d(textContains="搜索")
             if search_entry.exists(timeout=3):
-                search_entry.click()
+                self._human_click_element(search_entry)
                 self._log("已点击搜索入口")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
                 return True
 
             # 查找搜索图标
@@ -1125,9 +1641,9 @@ class DamaiU2Automation:
                 resourceIdMatches=".*search.*|.*home_search.*"
             )
             if search_icon.exists(timeout=3):
-                search_icon.click()
+                self._human_click_element(search_icon)
                 self._log("已点击搜索图标")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
                 return True
 
         except Exception as e:
@@ -1136,7 +1652,7 @@ class DamaiU2Automation:
         # 策略 2：WebView 中打开搜索页
         if self.switch_to_webview():
             self.navigate_to_url(H5_SEARCH_URL)
-            time.sleep(3)
+            self._human_delay(3, jitter_ratio=0.2)
             return True
 
         return False
@@ -1176,7 +1692,7 @@ class DamaiU2Automation:
                 )
                 if ok:
                     self._log("已通过 WebView(JS) 输入搜索关键词")
-                    time.sleep(3)
+                    self._human_delay(3, jitter_ratio=0.2)
                     return True
             except Exception as e:
                 self._log(f"WebView 搜索失败：{e}")
@@ -1188,25 +1704,35 @@ class DamaiU2Automation:
                 resourceIdMatches=".*search.*input.*|.*query.*"
             )
             if search_field.exists(timeout=3):
-                search_field.set_text(keyword)
+                # 拟人化：逐字输入搜索关键词
+                if self._hb:
+                    self._hb.human_type(self.d, search_field, keyword, mode="normal")
+                else:
+                    search_field.set_text(keyword)
+                # 拟人化：输入后短暂停顿再搜索
+                self._human_delay(0.5, jitter_ratio=0.3)
                 # 点击搜索按钮
                 search_btn = self.d(textContains="搜索")
                 if search_btn.exists(timeout=2):
-                    search_btn.click()
+                    self._human_click_element(search_btn)
                 else:
                     # 按键盘回车
                     self.d.press("enter")
                 self._log("已通过 Native 输入搜索关键词")
-                time.sleep(3)
+                self._human_delay(3, jitter_ratio=0.2)
                 return True
 
             # 通用 EditText
             edit = self.d(className="android.widget.EditText")
             if edit.exists(timeout=3):
-                edit.set_text(keyword)
+                # 拟人化：逐字输入搜索关键词
+                if self._hb:
+                    self._hb.human_type(self.d, edit, keyword, mode="normal")
+                else:
+                    edit.set_text(keyword)
                 self.d.press("enter")
                 self._log("已通过 EditText 搜索")
-                time.sleep(3)
+                self._human_delay(3, jitter_ratio=0.2)
                 return True
 
         except Exception as e:
@@ -1611,9 +2137,13 @@ class DamaiU2Automation:
             if first_item.exists(timeout=5):
                 result["name"] = first_item.get_text() or ""
 
+                # 拟人化：点击前做浏览手势
+                if self._hb:
+                    self._hb.random_micro_action(self.d)
+
                 # 点击进入详情页获取 ID
-                first_item.click()
-                time.sleep(3)
+                self._human_click_element(first_item)
+                self._human_delay(3, jitter_ratio=0.2)
 
                 # 从当前 URL 获取 ID
                 current_url = self.get_current_url()
@@ -1745,7 +2275,7 @@ class DamaiU2Automation:
             print("❌ 无法输入手机号")
             return False
 
-        time.sleep(1)
+        self._human_delay(1, jitter_ratio=0.2)
 
         # Step 3: 点击发送验证码
         if not self.click_send_code():
@@ -1769,7 +2299,7 @@ class DamaiU2Automation:
                 print("❌ 无法输入验证码")
                 continue
 
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
 
             if not self.click_login():
                 print("❌ 无法点击登录按钮")

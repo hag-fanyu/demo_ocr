@@ -99,6 +99,8 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
         device_serial: Optional[str] = None,
         verbose: bool = False,
         ocr_engine: Optional[str] = None,
+        human: bool = True,
+        human_speed: float = 1.0,
     ):
         """
         Args:
@@ -106,8 +108,15 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
             verbose: 是否输出详细日志
             ocr_engine: 指定 OCR 引擎（paddleocr/rapidocr/tesseract/auto），
                         默认 auto 自动检测
+            human: 是否启用拟人化操作模式
+            human_speed: 拟人化速度倍率
         """
-        super().__init__(device_serial=device_serial, verbose=verbose)
+        super().__init__(
+            device_serial=device_serial,
+            verbose=verbose,
+            human=human,
+            human_speed=human_speed,
+        )
 
         # OCR 引擎
         self._ocr_engine = None      # OCR 实例
@@ -354,12 +363,9 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
 
         for attempt in range(scroll_retry + 1):
             if attempt > 0:
-                # 滚动页面
-                if scroll_direction == "down":
-                    self.d.swipe(0.5, 0.8, 0.5, 0.2)
-                else:
-                    self.d.swipe(0.5, 0.2, 0.5, 0.8)
-                time.sleep(1)
+                # 滚动页面（拟人化）
+                self._human_scroll(direction=scroll_direction, distance=0.5)
+                self._human_delay(1, jitter_ratio=0.2)
                 self._log(f"滚动重试第 {attempt} 次")
 
             # 截屏 + OCR
@@ -404,8 +410,11 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
                     f"conf={best['confidence']:.2f}"
                 )
 
-                # 点击
-                self.d.click(cx, cy)
+                # 点击（拟人化）
+                if self._hb:
+                    self._hb.human_click(self.d, cx, cy)
+                else:
+                    self.d.click(cx, cy)
                 self._log(f"已点击坐标 ({cx:.0f}, {cy:.0f})")
                 return True
 
@@ -432,9 +441,9 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
 
         for scroll_idx in range(max_scrolls + 1):
             if scroll_idx > 0:
-                # 向上滑动（查看下方内容）
-                self.d.swipe(0.5, 0.7, 0.5, 0.3)
-                time.sleep(1.5)  # 等待页面稳定
+                # 向上滑动（查看下方内容）— 拟人化滚动
+                self._human_scroll(direction="down", distance=0.3)
+                self._human_delay(1.5, jitter_ratio=0.2)  # 等待页面稳定
 
             screenshot_path = self._take_screenshot()
             ocr_results = self._ocr_recognize(screenshot_path)
@@ -494,7 +503,7 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
         # ── Native 层（精准定位）──
         try:
             self.switch_to_native()
-            time.sleep(2)  # 等待列表加载
+            self._human_delay(2, jitter_ratio=0.2)  # 等待列表加载
 
             # 获取屏幕尺寸，用于跳过顶部标题栏
             window_size = self.d.window_size()
@@ -564,9 +573,9 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
                     result["name"] = best_text
                     self._log(f"选择第一条演出：{best_text!r} (idx={best_idx})")
 
-                    # 点击进入演出详情
-                    text_views[best_idx].click()
-                    time.sleep(3)
+                    # 点击进入演出详情（拟人化）
+                    self._human_click_element(text_views[best_idx])
+                    self._human_delay(3, jitter_ratio=0.2)
                     print(f"✅ 已点击第一条预约演出：{best_text}")
                     return result
 
@@ -576,7 +585,7 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
         # ── 备用：尝试通过 RecyclerView/ListView 的子项定位 ──
         try:
             self.switch_to_native()
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
 
             # 查找 RecyclerView 或 ListView
             for list_class in [
@@ -601,7 +610,7 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
                                 self._log(f"列表第一项文字：{txt!r}")
 
                         first_child.click()
-                        time.sleep(3)
+                        self._human_delay(3, jitter_ratio=0.2)
                         print(f"✅ 已点击列表第一条演出")
                         return result
 
@@ -703,7 +712,11 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
 
         try:
             self.switch_to_native()
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
+
+            # 拟人化：先浏览页面
+            if self._hb:
+                self._hb.human_gesture_navigate(self.d)
 
             # 策略 1：在下半屏查找「已预约」
             if self._ocr_find_and_click(
@@ -713,7 +726,7 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
                 scroll_direction="down",
             ):
                 print("✅ 已通过 OCR 点击「已预约」")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
                 return True
 
             # 策略 2：全屏查找「已预约」
@@ -724,7 +737,7 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
                 scroll_direction="down",
             ):
                 print("✅ 已通过 OCR 点击「已预约」（全屏搜索）")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
                 return True
 
             # 策略 3：查找「预约」（更宽泛）
@@ -735,7 +748,7 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
                 scroll_direction="down",
             ):
                 print("✅ 已通过 OCR 点击含「预约」的按钮")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
                 return True
 
             # 策略 4：调试输出 — 打印当前屏幕所有 OCR 文字
@@ -788,7 +801,7 @@ class DamaiReserveOCRAutomation(DamaiReserveAutomation):
 
         try:
             self.switch_to_native()
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
 
             # OCR 提取所有文字（含滚动翻页）
             all_ocr = self._ocr_extract_all_text(max_scrolls=5)
@@ -937,11 +950,17 @@ def main() -> None:
                         help="OCR 引擎（默认 auto 自动检测）")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="输出详细日志")
+    parser.add_argument("--no-human", action="store_true",
+                        help="关闭拟人化模式（使用原始机械操作）")
+    parser.add_argument("--human-speed", type=float, default=1.0,
+                        help="拟人化速度倍率（默认 1.0，0.5 更慢更拟人，2.0 更快）")
     args = parser.parse_args()
 
     phone = args.phone or DEFAULT_PHONE
     cookie_file = args.cookie_file
     verbose = args.verbose
+    human = not args.no_human
+    human_speed = args.human_speed
 
     print("╔════════════════════════════════════════════════╗")
     print("║  大麦网 抢票预约自动化 (OCR 版)                ║")
@@ -973,6 +992,8 @@ def main() -> None:
         device_serial=args.device,
         verbose=verbose,
         ocr_engine=args.ocr,
+        human=human,
+        human_speed=human_speed,
     )
     automation.connect_device()
 
@@ -1044,7 +1065,7 @@ def main() -> None:
         print("将尝试提取当前页面信息…")
 
     # 提取场次和票档信息（OCR 版）
-    time.sleep(2)  # 等待页面加载
+    automation._human_delay(2, jitter_ratio=0.2)  # 等待页面加载
     info = automation.extract_sessions_and_tickets()
 
     # 输出结果

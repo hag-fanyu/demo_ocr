@@ -46,6 +46,27 @@ DEFAULT_COOKIE_FILE = "damai_cookies_reserve.json"
 class DamaiReserveAutomation(DamaiU2Automation):
     """大麦网抢票预约自动化（继承 DamaiU2Automation，扩展预约相关操作）。"""
 
+    def __init__(
+        self,
+        device_serial: Optional[str] = None,
+        verbose: bool = False,
+        human: bool = True,
+        human_speed: float = 1.0,
+    ):
+        """
+        Args:
+            device_serial: 设备序列号，None 则自动检测
+            verbose: 是否输出详细日志
+            human: 是否启用拟人化操作模式
+            human_speed: 拟人化速度倍率
+        """
+        super().__init__(
+            device_serial=device_serial,
+            verbose=verbose,
+            human=human,
+            human_speed=human_speed,
+        )
+
     # ── 登录状态检测 ──────────────────────────────────────────────────
     def check_login_status(self) -> bool:
         """检测当前是否已登录。
@@ -64,7 +85,7 @@ class DamaiReserveAutomation(DamaiU2Automation):
         try:
             # 先回到 Native 层
             self.switch_to_native()
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
 
             # 点击底部「我的」tab（多种匹配方式）
             my_tab = self.d(text="我的")
@@ -75,9 +96,9 @@ class DamaiReserveAutomation(DamaiU2Automation):
             if not my_tab.exists(timeout=3):
                 my_tab = self.d(resourceIdMatches=".*tab.*mine.*|.*tab.*my.*|.*bottom.*my.*")
             if my_tab.exists(timeout=3):
-                my_tab.click()
+                self._human_click_element(my_tab)
                 self._log("已点击「我的」tab")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
             else:
                 self._warn("未找到「我的」tab")
 
@@ -153,7 +174,7 @@ class DamaiReserveAutomation(DamaiU2Automation):
                     # 检查是否已勾选
                     checked = checkbox.info.get("checked", False)
                     if not checked:
-                        checkbox.click()
+                        self._human_click_element(checkbox)
                         self._log("已勾选同意条款（Native CheckBox）")
                         print("✅ 已勾选同意条款")
                     else:
@@ -162,7 +183,7 @@ class DamaiReserveAutomation(DamaiU2Automation):
                     return True
                 else:
                     # 没有 CheckBox 但有「同意」文字，尝试点击文字
-                    agree_text.click()
+                    self._human_click_element(agree_text)
                     self._log("已点击「同意」文字")
                     print("✅ 已点击同意条款")
                     return True
@@ -172,7 +193,7 @@ class DamaiReserveAutomation(DamaiU2Automation):
             if checkbox.exists(timeout=2):
                 checked = checkbox.info.get("checked", False)
                 if not checked:
-                    checkbox.click()
+                    self._human_click_element(checkbox)
                     self._log("已勾选 CheckBox（Native）")
                     print("✅ 已勾选同意条款")
                 else:
@@ -269,19 +290,19 @@ class DamaiReserveAutomation(DamaiU2Automation):
             print("❌ 无法到达登录页面")
             return False
 
-        time.sleep(2)
+        self._human_delay(2, jitter_ratio=0.2)
 
         # Step 2: 勾选同意条款
         self.agree_terms()
 
-        time.sleep(1)
+        self._human_delay(1, jitter_ratio=0.2)
 
         # Step 3: 输入手机号
         if not self.input_phone(phone):
             print("❌ 无法输入手机号")
             return False
 
-        time.sleep(1)
+        self._human_delay(1, jitter_ratio=0.2)
 
         # Step 4: 点击发送验证码
         if not self.click_send_code():
@@ -305,7 +326,7 @@ class DamaiReserveAutomation(DamaiU2Automation):
                 print("❌ 无法输入验证码")
                 continue
 
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
 
             if not self.click_login():
                 print("❌ 无法点击登录按钮")
@@ -331,7 +352,7 @@ class DamaiReserveAutomation(DamaiU2Automation):
 
         try:
             self.switch_to_native()
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
 
             # 确保在「我的」页面（多种匹配方式）
             my_tab = self.d(text="我的")
@@ -342,35 +363,39 @@ class DamaiReserveAutomation(DamaiU2Automation):
             if not my_tab.exists(timeout=3):
                 my_tab = self.d(resourceIdMatches=".*tab.*mine.*|.*tab.*my.*|.*bottom.*my.*")
             if my_tab.exists(timeout=3):
-                my_tab.click()
+                self._human_click_element(my_tab)
                 self._log("已点击「我的」tab")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
+
+                # 拟人化：浏览手势
+                if self._hb:
+                    self._hb.human_gesture_navigate(self.d)
 
             # 查找「抢票预约」入口
             # 策略 1：精确匹配
             reserve_entry = self.d(text="抢票预约")
             if reserve_entry.exists(timeout=5):
-                reserve_entry.click()
+                self._human_click_element(reserve_entry)
                 self._log("已点击「抢票预约」")
-                time.sleep(3)
+                self._human_delay(3, jitter_ratio=0.2)
                 print("✅ 已进入「抢票预约」页面")
                 return True
 
             # 策略 2：包含匹配
             reserve_entry = self.d(textContains="抢票预约")
             if reserve_entry.exists(timeout=3):
-                reserve_entry.click()
+                self._human_click_element(reserve_entry)
                 self._log("已点击「抢票预约」（包含匹配）")
-                time.sleep(3)
+                self._human_delay(3, jitter_ratio=0.2)
                 print("✅ 已进入「抢票预约」页面")
                 return True
 
             # 策略 3：更宽泛的匹配
             reserve_entry = self.d(textContains="预约")
             if reserve_entry.exists(timeout=3):
-                reserve_entry.click()
+                self._human_click_element(reserve_entry)
                 self._log("已点击含「预约」的入口")
-                time.sleep(3)
+                self._human_delay(3, jitter_ratio=0.2)
                 print("✅ 已进入预约相关页面")
                 return True
 
@@ -379,22 +404,22 @@ class DamaiReserveAutomation(DamaiU2Automation):
                 resourceIdMatches=".*reserve.*|.*booking.*|.*appointment.*|.*subscribe.*"
             )
             if reserve_entry.exists(timeout=3):
-                reserve_entry.click()
+                self._human_click_element(reserve_entry)
                 self._log("已点击预约入口（resourceId）")
-                time.sleep(3)
+                self._human_delay(3, jitter_ratio=0.2)
                 print("✅ 已进入预约相关页面")
                 return True
 
             # 策略 5：尝试滚动页面查找
             self._log("尝试滚动查找「抢票预约」…")
             for _ in range(5):
-                self.d.swipe(0.5, 0.8, 0.5, 0.2)
-                time.sleep(1)
+                self._human_scroll(direction="down", distance=0.5)
+                self._human_delay(1, jitter_ratio=0.2)
                 reserve_entry = self.d(textContains="预约")
                 if reserve_entry.exists(timeout=2):
-                    reserve_entry.click()
+                    self._human_click_element(reserve_entry)
                     self._log("滚动后找到预约入口")
-                    time.sleep(3)
+                    self._human_delay(3, jitter_ratio=0.2)
                     print("✅ 已进入预约相关页面")
                     return True
 
@@ -449,7 +474,11 @@ class DamaiReserveAutomation(DamaiU2Automation):
         # ── Native 层 ──
         try:
             self.switch_to_native()
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
+
+            # 拟人化：浏览手势
+            if self._hb:
+                self._hb.human_gesture_navigate(self.d)
 
             # 查找第一个列表项（演出卡片）
             # 策略 1：通过 resourceId 查找
@@ -461,8 +490,8 @@ class DamaiReserveAutomation(DamaiU2Automation):
                 self._log(f"找到第一条预约演出（Native resourceId）：{result['name']}")
 
                 # 点击进入详情
-                first_item.click()
-                time.sleep(3)
+                self._human_click_element(first_item)
+                self._human_delay(3, jitter_ratio=0.2)
                 return result if result.get("name") else result
 
             # 策略 2：通过 className 查找第一个可点击项
@@ -475,8 +504,8 @@ class DamaiReserveAutomation(DamaiU2Automation):
                     result["name"] = child_text.get_text() or ""
                     self._log(f"找到第一条预约演出（Native TextView）：{result['name']}")
 
-                first_item.click()
-                time.sleep(3)
+                self._human_click_element(first_item)
+                self._human_delay(3, jitter_ratio=0.2)
                 return result
 
             # 策略 3：直接查找所有 TextView，取第一个看起来像演出名的
@@ -493,8 +522,8 @@ class DamaiReserveAutomation(DamaiU2Automation):
                         if len(txt) > 4 and txt not in skip_texts:
                             result["name"] = txt
                             self._log(f"疑似演出名：{txt}")
-                            tv.click()
-                            time.sleep(3)
+                            self._human_click_element(tv)
+                            self._human_delay(3, jitter_ratio=0.2)
                             return result
                     except Exception:
                         continue
@@ -585,36 +614,40 @@ class DamaiReserveAutomation(DamaiU2Automation):
         # ── Native 层 ──
         try:
             self.switch_to_native()
-            time.sleep(1)
+            self._human_delay(1, jitter_ratio=0.2)
+
+            # 拟人化：先浏览页面内容
+            if self._hb:
+                self._hb.human_gesture_navigate(self.d)
 
             # 先尝试直接查找
             reserved_btn = self.d(textContains="已预约")
             if reserved_btn.exists(timeout=5):
-                reserved_btn.click()
+                self._human_click_element(reserved_btn)
                 self._log("已点击「已预约」按钮")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
                 print("✅ 已点击「已预约」")
                 return True
 
-            # 滚动到页面底部查找
+            # 滚动到页面底部查找（拟人化滚动）
             self._log("滚动到页面底部查找…")
             for _ in range(8):
-                self.d.swipe(0.5, 0.8, 0.5, 0.2)
-                time.sleep(0.5)
+                self._human_scroll(direction="down", distance=0.4)
+                self._human_delay(0.5, jitter_ratio=0.2)
                 reserved_btn = self.d(textContains="已预约")
                 if reserved_btn.exists(timeout=2):
-                    reserved_btn.click()
+                    self._human_click_element(reserved_btn)
                     self._log("滚动后找到并点击「已预约」")
-                    time.sleep(2)
+                    self._human_delay(2, jitter_ratio=0.2)
                     print("✅ 已点击「已预约」")
                     return True
 
             # 备用：查找含「预约」的按钮
             reserved_btn = self.d(textContains="预约")
             if reserved_btn.exists(timeout=3):
-                reserved_btn.click()
+                self._human_click_element(reserved_btn)
                 self._log("已点击含「预约」的按钮")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
                 print("✅ 已点击预约相关按钮")
                 return True
 
@@ -623,9 +656,9 @@ class DamaiReserveAutomation(DamaiU2Automation):
                 resourceIdMatches=".*reserve.*btn.*|.*booking.*btn.*|.*subscribe.*btn.*"
             )
             if reserved_btn.exists(timeout=3):
-                reserved_btn.click()
+                self._human_click_element(reserved_btn)
                 self._log("已点击预约按钮（resourceId）")
-                time.sleep(2)
+                self._human_delay(2, jitter_ratio=0.2)
                 print("✅ 已点击预约按钮")
                 return True
 
@@ -666,7 +699,7 @@ class DamaiReserveAutomation(DamaiU2Automation):
                 )
                 if ok:
                     self._log("WebView 点击「已预约」成功")
-                    time.sleep(2)
+                    self._human_delay(2, jitter_ratio=0.2)
                     print("✅ 已点击「已预约」")
                     return True
             except Exception as e:
@@ -795,7 +828,7 @@ class DamaiReserveAutomation(DamaiU2Automation):
         if not info["sessions"] and not info["tickets"]:
             try:
                 self.switch_to_native()
-                time.sleep(1)
+                self._human_delay(1, jitter_ratio=0.2)
 
                 # 获取当前页面的所有文本
                 all_text = []
@@ -966,11 +999,17 @@ def main() -> None:
                         help="使用 Frida 注入开启 WebView 调试（需 root + frida-server）")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="输出详细日志")
+    parser.add_argument("--no-human", action="store_true",
+                        help="关闭拟人化模式（使用原始机械操作）")
+    parser.add_argument("--human-speed", type=float, default=1.0,
+                        help="拟人化速度倍率（默认 1.0，0.5 更慢更拟人，2.0 更快）")
     args = parser.parse_args()
 
     phone = args.phone or DEFAULT_PHONE
     cookie_file = args.cookie_file
     verbose = args.verbose
+    human = not args.no_human
+    human_speed = args.human_speed
 
     print("╔════════════════════════════════════════════════╗")
     print("║  大麦网 抢票预约自动化 (u2)                    ║")
@@ -1002,6 +1041,8 @@ def main() -> None:
     automation = DamaiReserveAutomation(
         device_serial=args.device,
         verbose=verbose,
+        human=human,
+        human_speed=human_speed,
     )
     automation.connect_device()
 
@@ -1076,7 +1117,7 @@ def main() -> None:
         print("将尝试提取当前页面信息…")
 
     # 提取场次和票档信息
-    time.sleep(2)  # 等待页面加载
+    automation._human_delay(2, jitter_ratio=0.2)  # 等待页面加载
     info = automation.extract_sessions_and_tickets()
 
     # 输出结果
